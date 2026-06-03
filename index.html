@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="apple-mobile-web-app-title" content="FootGolf"/>
   <meta name="theme-color" content="#0d3d1f"/>
-  <link rel="apple-touch-icon" href="https://drive.google.com/uc?id=10xcHFy8DsG6K07GzMZgnXl3h5Hr8OKR7"/>
+  <link rel="apple-touch-icon" href="https://lh3.googleusercontent.com/d/10xcHFy8DsG6K07GzMZgnXl3h5Hr8OKR7"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -39,9 +39,8 @@
   const ADMIN_PIN = "212224";
   const COLORS = ["#FF6B6B","#4ECDC4","#FFE66D","#A8E6CF","#FF8B94","#C3A6FF","#F7C59F","#B5EAD7","#FFDAC1"];
   const SAVE_KEY = "fg_game";
-  const NAMES_KEY = "fg_names";
   const SHEET_URL_KEY = "fg_sheet_url";
-  const HERO_IMG = "https://drive.google.com/uc?id=181w6NBLkRnauoO92VdrqR0A_YGxXfQ06";
+  const HERO_IMG = "https://lh3.googleusercontent.com/d/181w6NBLkRnauoO92VdrqR0A_YGxXfQ06";
 
   // Points table [playerCount][rank] (0-indexed rank)
   const POINTS_TABLE = {
@@ -108,12 +107,14 @@
 
   function App() {
     const [screen, setScreen] = useState("setup");
-    const [playerNames, setPlayerNames] = useState(["",""]);
+    const [playerCount, setPlayerCount] = useState(null);
+    const [selectedNames, setSelectedNames] = useState([]);
     const [players, setPlayers] = useState([]);
     const [currentRound, setCurrentRound] = useState(0);
     const [inputScores, setInputScores] = useState([]);
     const [error, setError] = useState("");
-    const [savedNames, setSavedNames] = useState([]);
+    const [availableNames, setAvailableNames] = useState([]);
+    const [loadingNames, setLoadingNames] = useState(false);
     const [hasResume, setHasResume] = useState(false);
     const [confirmNext, setConfirmNext] = useState(false);
     const [pendingScores, setPendingScores] = useState(null);
@@ -127,9 +128,9 @@
     const [leaderboardData, setLeaderboardData] = useState(null);
     const [leaderboardLoading, setLeaderboardLoading] = useState(false);
     const [hasSaved, setHasSaved] = useState(false);
+    const [newPlayerName, setNewPlayerName] = useState("");
 
     useEffect(() => {
-      setSavedNames(load(NAMES_KEY)||[]);
       const g = load(SAVE_KEY);
       if (g && g.screen==="game") setHasResume(true);
       const url = load(SHEET_URL_KEY)||"";
@@ -143,16 +144,25 @@
       setInputScores(g.players.map(()=>"")); setScreen("game"); setHasResume(false);
     }
 
+    async function loadAvailableNames() {
+      const url = load(SHEET_URL_KEY)||"";
+      if (!url) { setAvailableNames([]); return; }
+      setLoadingNames(true);
+      try {
+        const res = await fetch(url+"?action=getPlayers");
+        const data = await res.json();
+        setAvailableNames(data.players||[]);
+      } catch(e) { setAvailableNames([]); }
+      setLoadingNames(false);
+    }
+
     function startGame() {
-      const trimmed = playerNames.map(n=>n.trim());
-      if (trimmed.some(n=>!n)) { setError("กรุณากรอกชื่อผู้เล่นให้ครบ"); return; }
-      if (new Set(trimmed).size!==trimmed.length) { setError("ชื่อซ้ำกัน"); return; }
+      if (!playerCount) { setError("กรุณาเลือกจำนวนผู้เล่น"); return; }
+      if (selectedNames.length !== playerCount) { setError("กรุณาเลือกชื่อให้ครบ "+playerCount+" คน"); return; }
+      if (new Set(selectedNames).size !== selectedNames.length) { setError("ชื่อซ้ำกัน"); return; }
       setError("");
-      const names = load(NAMES_KEY)||[];
-      const updated = [...new Set([...trimmed,...names])].slice(0,20);
-      save(NAMES_KEY,updated); setSavedNames(updated);
-      const init = trimmed.map((name,i)=>({name,color:COLORS[i%COLORS.length],scores:[]}));
-      setPlayers(init); setCurrentRound(0); setInputScores(trimmed.map(()=>""));
+      const init = selectedNames.map((name,i)=>({name,color:COLORS[i%COLORS.length],scores:[]}));
+      setPlayers(init); setCurrentRound(0); setInputScores(selectedNames.map(()=>""));
       save(SAVE_KEY,{screen:"game",players:init,currentRound:0});
       setScreen("game"); setHasResume(false);
     }
@@ -240,13 +250,13 @@
     }
 
     function restart() {
-      save(SAVE_KEY,null); setScreen("setup"); setPlayerNames(["",""]); setPlayers([]);
+      save(SAVE_KEY,null); setScreen("setup"); setPlayerCount(null); setSelectedNames([]); setPlayers([]);
       setCurrentRound(0); setInputScores([]); setError(""); setHasResume(false);
       setFinalRanked(null); setPlayoffPlayers([]); setHasSaved(false);
     }
 
     function openSaveModal() { if(hasSaved) return; setPinInput(""); setPinError(""); setModal("confirm_save"); }
-    function openSettingsModal() { setPinInput(""); setPinError(""); setModal("pin_settings"); }
+    function openSettingsModal() { setPinInput(""); setPinError(""); setModal("pin_settings"); loadAvailableNames(); }
 
     function checkPinSave() {
       if (pinInput===ADMIN_PIN) { setModal("saving"); setPinError(""); sendToSheet(); }
@@ -257,6 +267,27 @@
       else setPinError("PIN ไม่ถูกต้อง");
     }
     function saveSettings() { save(SHEET_URL_KEY,sheetUrlInput); setSheetUrl(sheetUrlInput); setModal(null); }
+
+    async function addPlayerToSheet() {
+      const name = newPlayerName.trim();
+      if (!name) return;
+      const url = load(SHEET_URL_KEY)||"";
+      if (!url) { alert("ยังไม่ได้ตั้งค่า URL"); return; }
+      try {
+        await fetch(url, { method:"POST", mode:"no-cors", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"addPlayer",name}) });
+        setNewPlayerName("");
+        setAvailableNames(prev=>[...prev, name]);
+      } catch(e) {}
+    }
+
+    async function removePlayerFromSheet(name) {
+      const url = load(SHEET_URL_KEY)||"";
+      if (!url) return;
+      try {
+        await fetch(url, { method:"POST", mode:"no-cors", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"removePlayer",name}) });
+        setAvailableNames(prev=>prev.filter(n=>n!==name));
+      } catch(e) {}
+    }
 
     async function sendToSheet() {
       if (!sheetUrl) { setModal("no_url"); return; }
@@ -295,10 +326,14 @@
 
     return (
       <div style={S.root}><div style={S.card}>
-        {screen==="setup" && <SetupScreen playerNames={playerNames} savedNames={savedNames}
-          onAdd={()=>playerNames.length<9&&setPlayerNames([...playerNames,""])}
-          onRemove={i=>playerNames.length>2&&setPlayerNames(playerNames.filter((_,idx)=>idx!==i))}
-          onUpdate={(i,v)=>{const n=[...playerNames];n[i]=v;setPlayerNames(n);}}
+        {screen==="setup" && <SetupScreen
+          playerCount={playerCount} onSelectCount={(n)=>{ setPlayerCount(n); setSelectedNames([]); loadAvailableNames(); }}
+          selectedNames={selectedNames}
+          onToggleName={(name)=>{
+            if (selectedNames.includes(name)) setSelectedNames(selectedNames.filter(n=>n!==name));
+            else if (selectedNames.length < (playerCount||9)) setSelectedNames([...selectedNames, name]);
+          }}
+          availableNames={availableNames} loadingNames={loadingNames}
           onStart={startGame} error={error} hasResume={hasResume} onResume={resume}
           onSettings={openSettingsModal} onLeaderboard={openLeaderboard}
         />}
@@ -376,14 +411,35 @@
 
         {/* Settings */}
         {modal==="settings"&&(
-          <div className="overlay"><div className="modal" style={{textAlign:"left"}}>
+          <div className="overlay"><div className="modal" style={{textAlign:"left",maxHeight:"80vh",overflowY:"auto"}}>
             <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 18px",textAlign:"center"}}>⚙️ ตั้งค่า</p>
             <p style={{fontSize:14,color:"rgba(255,255,255,0.5)",margin:"0 0 8px"}}>Google Apps Script URL</p>
             <input value={sheetUrlInput} onChange={e=>setSheetUrlInput(e.target.value)}
-              style={{...S.input,fontSize:13,padding:"10px 12px",marginBottom:16}}
+              style={{...S.input,fontSize:13,padding:"10px 12px",marginBottom:10}}
               placeholder="https://script.google.com/macros/s/.../exec"/>
-            <button onClick={saveSettings} style={{...S.startBtn,marginTop:0,marginBottom:10}}>บันทึก</button>
-            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ปิด</button>
+            <button onClick={saveSettings} style={{...S.startBtn,marginTop:0,marginBottom:16}}>บันทึก URL</button>
+            <div style={{borderTop:"1px solid rgba(255,255,255,0.12)",paddingTop:14,marginBottom:10}}>
+              <p style={{fontSize:15,fontWeight:700,color:"#fff",margin:"0 0 12px"}}>👥 จัดการรายชื่อผู้เล่น</p>
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                <input value={newPlayerName} onChange={e=>setNewPlayerName(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&addPlayerToSheet()}
+                  style={{...S.input,fontSize:15,padding:"10px 12px",flex:1}}
+                  placeholder="ชื่อผู้เล่นใหม่"/>
+                <button onClick={addPlayerToSheet}
+                  style={{background:"#228b44",border:"none",color:"#fff",borderRadius:12,padding:"10px 16px",fontSize:18,cursor:"pointer",flexShrink:0}}>+</button>
+              </div>
+              <div style={{maxHeight:180,overflowY:"auto"}}>
+                {availableNames.length===0 && <p style={{color:"rgba(255,255,255,0.4)",fontSize:14,margin:0,textAlign:"center"}}>ยังไม่มีรายชื่อ</p>}
+                {availableNames.map(name=>(
+                  <div key={name} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:"rgba(255,255,255,0.05)",borderRadius:10,marginBottom:6}}>
+                    <span style={{fontSize:16,color:"#fff"}}>{name}</span>
+                    <button onClick={()=>removePlayerFromSheet(name)}
+                      style={{background:"rgba(255,80,80,0.25)",border:"none",color:"#ff6b6b",borderRadius:8,width:30,height:30,cursor:"pointer",fontSize:14}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button onClick={()=>{ setModal(null); loadAvailableNames(); }} style={S.cancelBtn}>ปิด</button>
           </div></div>
         )}
 
@@ -405,33 +461,8 @@
     );
   }
 
-  function NameInput({ value, onChange, placeholder, savedNames }) {
-    const [open,setOpen]=useState(false);
-    const ref=useRef();
-    const filtered=savedNames.filter(n=>n.toLowerCase().includes(value.toLowerCase())&&n!==value);
-    useEffect(()=>{
-      const h=e=>{ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); };
-      document.addEventListener("touchstart",h); document.addEventListener("mousedown",h);
-      return ()=>{ document.removeEventListener("touchstart",h); document.removeEventListener("mousedown",h); };
-    },[]);
-    return (
-      <div style={{position:"relative",flex:1}} ref={ref}>
-        <input style={S.input} placeholder={placeholder} value={value}
-          onChange={e=>{onChange(e.target.value);setOpen(true);}} onFocus={()=>setOpen(true)} maxLength={16}/>
-        {open&&filtered.length>0&&(
-          <div className="dd-list">
-            {filtered.map(name=>(
-              <div key={name} className="dd-item"
-                onMouseDown={()=>{onChange(name);setOpen(false);}}
-                onTouchEnd={e=>{e.preventDefault();onChange(name);setOpen(false);}}>{name}</div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function SetupScreen({ playerNames, savedNames, onAdd, onRemove, onUpdate, onStart, error, hasResume, onResume, onSettings, onLeaderboard }) {
+  function SetupScreen({ playerCount, onSelectCount, selectedNames, onToggleName, availableNames, loadingNames, onStart, error, hasResume, onResume, onSettings, onLeaderboard }) {
+    const COUNT_ROWS = [[1,2,3,4,5],[6,7,8,9]];
     return (
       <div>
         <div className="hero-wrap">
@@ -446,18 +477,64 @@
           <button onClick={onSettings} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"rgba(255,255,255,0.5)",fontSize:13,cursor:"pointer",padding:"7px 12px",borderRadius:10}}>⚙️ ตั้งค่า</button>
         </div>
         {hasResume&&<button style={{...S.startBtn,background:"linear-gradient(135deg,#11998e,#38ef7d)",marginBottom:14}} onClick={onResume}>▶️ เล่นต่อจากเดิม</button>}
-        <div style={{marginBottom:16}}>
-          {playerNames.map((name,i)=>(
-            <div key={i} style={S.playerRow}>
-              <div style={{...S.dot,background:COLORS[i%COLORS.length]}}/>
-              <NameInput value={name} onChange={v=>onUpdate(i,v)} placeholder={"ผู้เล่น "+(i+1)} savedNames={savedNames}/>
-              {playerNames.length>2&&<button style={S.iconBtn} onClick={()=>onRemove(i)}>✕</button>}
-            </div>
-          ))}
-        </div>
-        {playerNames.length<9&&<button style={S.addBtn} onClick={onAdd}>+ เพิ่มผู้เล่น</button>}
+        <p style={{fontSize:15,color:"rgba(255,255,255,0.6)",margin:"0 0 10px"}}>เลือกจำนวนผู้เล่น</p>
+        {COUNT_ROWS.map((row,ri)=>(
+          <div key={ri} style={{display:"flex",gap:8,marginBottom:8}}>
+            {row.map(n=>(
+              <button key={n} onClick={()=>onSelectCount(n)} style={{
+                flex:1,padding:"13px 0",borderRadius:14,border:"none",cursor:"pointer",fontSize:20,fontWeight:700,
+                background:playerCount===n?"linear-gradient(135deg,#228b44,#1a6b3a)":"rgba(255,255,255,0.08)",
+                color:playerCount===n?"#fff":"rgba(255,255,255,0.7)",
+                boxShadow:playerCount===n?"0 0 0 2px #4caf50 inset":"none"
+              }}>{n}</button>
+            ))}
+          </div>
+        ))}
+        {playerCount && (
+          <div style={{marginTop:16}}>
+            <p style={{fontSize:15,color:"rgba(255,255,255,0.6)",margin:"0 0 10px"}}>
+              เลือกผู้เล่น <span style={{color:"#FFD700",fontWeight:700}}>{selectedNames.length}/{playerCount}</span>
+            </p>
+            {loadingNames ? (
+              <p style={{color:"rgba(255,255,255,0.4)",textAlign:"center",fontSize:15}}>⏳ กำลังโหลด...</p>
+            ) : availableNames.length===0 ? (
+              <p style={{color:"rgba(255,255,255,0.4)",textAlign:"center",fontSize:14}}>ยังไม่มีรายชื่อ — เพิ่มได้ใน ⚙️ ตั้งค่า</p>
+            ) : (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                {availableNames.map((name,i)=>{
+                  const idx=selectedNames.indexOf(name);
+                  const chosen=idx!==-1;
+                  return (
+                    <button key={name} onClick={()=>onToggleName(name)} style={{
+                      padding:"10px 4px",borderRadius:12,border:"none",cursor:"pointer",
+                      fontSize:14,fontWeight:600,
+                      background:chosen?COLORS[idx%COLORS.length]:"rgba(255,255,255,0.08)",
+                      color:chosen?"#1a1a1a":"rgba(255,255,255,0.8)",
+                      position:"relative",overflow:"hidden"
+                    }}>
+                      {chosen && <span style={{position:"absolute",top:3,right:4,fontSize:11,fontWeight:800,color:"#1a1a1a",opacity:0.7}}>{idx+1}</span>}
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {selectedNames.length>0 && (
+              <div style={{marginTop:12,display:"flex",flexWrap:"wrap",gap:6}}>
+                {selectedNames.map((name,i)=>(
+                  <div key={name} style={{display:"flex",alignItems:"center",gap:5,background:"rgba(255,255,255,0.07)",borderRadius:10,padding:"5px 10px"}}>
+                    <div style={{...S.dot,background:COLORS[i%COLORS.length]}}/>
+                    <span style={{fontSize:14,color:"#fff"}}>{name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {error&&<p style={S.error}>{error}</p>}
-        <button style={S.startBtn} onClick={onStart}>เริ่มเกม →</button>
+        {playerCount && selectedNames.length===playerCount && (
+          <button style={{...S.startBtn,marginTop:14}} onClick={onStart}>เริ่มเกม →</button>
+        )}
       </div>
     );
   }
