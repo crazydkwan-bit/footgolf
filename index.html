@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FootGolf ⛳</title>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="FootGolf"/>
+  <meta name="theme-color" content="#0d3d1f"/>
+  <link rel="apple-touch-icon" href="https://drive.google.com/uc?id=10xcHFy8DsG6K07GzMZgnXl3h5Hr8OKR7"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;}
+    body{margin:0;padding:0;background:#0d3d1f;}
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
+    .dd-list{position:absolute;top:100%;left:0;right:0;z-index:100;background:#1a3a28;border:1px solid rgba(255,255,255,0.2);border-radius:12px;margin-top:4px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.5);}
+    .dd-item{padding:13px 16px;font-size:18px;color:#fff;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.07);}
+    .dd-item:last-child{border-bottom:none;}
+    .dd-item:active{background:rgba(34,139,68,0.3);}
+    .hero-img{width:100%;height:200px;object-fit:cover;object-position:center 25%;display:block;}
+    .hero-wrap{position:relative;overflow:hidden;border-radius:18px 18px 0 0;margin:-32px -24px 24px;}
+    .hero-wrap::after{content:'';position:absolute;inset:0;background:linear-gradient(to bottom,rgba(13,61,31,0) 40%,rgba(13,61,31,0.97) 100%);}
+    .hero-text{position:absolute;bottom:14px;left:0;right:0;text-align:center;z-index:2;}
+    .hero-text h1{font-size:32px;font-weight:800;margin:0 0 3px;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,0.8);letter-spacing:1px;}
+    .hero-text p{font-size:14px;color:rgba(255,255,255,0.75);margin:0;text-shadow:0 1px 6px rgba(0,0,0,0.8);letter-spacing:0.5px;}
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:999;padding:20px;}
+    .modal{background:#1a3a28;border:1px solid rgba(255,255,255,0.15);border-radius:20px;padding:28px 24px;width:100%;max-width:380px;text-align:center;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  const { useState, useEffect, useRef } = React;
+  const ROUNDS = 18;
+  const ADMIN_PIN = "212224";
+  const COLORS = ["#FF6B6B","#4ECDC4","#FFE66D","#A8E6CF","#FF8B94","#C3A6FF","#F7C59F","#B5EAD7","#FFDAC1"];
+  const SAVE_KEY = "fg_game";
+  const NAMES_KEY = "fg_names";
+  const SHEET_URL_KEY = "fg_sheet_url";
+  const HERO_IMG = "https://drive.google.com/uc?id=181w6NBLkRnauoO92VdrqR0A_YGxXfQ06";
+
+  // Points table [playerCount][rank] (0-indexed rank)
+  const POINTS_TABLE = {
+    2: [3,1],
+    3: [5,3,1],
+    4: [8,5,3,1],
+    5: [10,7,5,3,1],
+    6: [12,9,7,5,3,1],
+    7: [14,11,9,7,5,3,1],
+    8: [15,12,10,8,6,4,2,1],
+    9: [16,13,11,9,7,5,3,2,1],
+  };
+
+  function getPoints(playerCount, rank) {
+    const table = POINTS_TABLE[Math.min(Math.max(playerCount,2),9)] || POINTS_TABLE[9];
+    return table[rank] || 0;
+  }
+
+  function calcSharedPoints(playerCount, startRank, count) {
+    let total = 0;
+    for (let i = 0; i < count; i++) total += getPoints(playerCount, startRank + i);
+    return Math.round((total / count) * 10) / 10;
+  }
+
+  const save = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch(e){} };
+  const load = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch(e){ return null; } };
+  const getRank = (players) => [...players]
+    .map(p=>({...p,total:p.scores.reduce((a,b)=>a+(b??0),0)}))
+    .sort((a,b)=>a.total-b.total);
+
+  // Assign ranks and points considering ties
+  // Players with _playoffWinner=true are forced to rank 1 (no ties)
+  function assignRanksAndPoints(ranked, playerCount) {
+    const result = [];
+    let i = 0;
+    // Check if first player is a playoff winner (no tie at 1st)
+    const hasPlayoffWinner = ranked.length > 0 && ranked[0]._playoffWinner;
+    while (i < ranked.length) {
+      const p = ranked[i];
+      // Playoff winner: always rank 1 alone, no tie
+      if (p._playoffWinner) {
+        const pts = calcSharedPoints(playerCount, 0, 1);
+        result.push({ ...p, rank: 1, tieCount: 1, points: pts });
+        i++;
+        continue;
+      }
+      const score = p.total;
+      let j = i;
+      // Don't group ties at position 0 if there's a playoff winner
+      if (hasPlayoffWinner || i > 0) {
+        while (j < ranked.length && ranked[j].total === score && !ranked[j]._playoffWinner) j++;
+      } else {
+        while (j < ranked.length && ranked[j].total === score) j++;
+      }
+      const tieCount = j - i;
+      const sharedPts = calcSharedPoints(playerCount, i, tieCount);
+      for (let k = i; k < j; k++) {
+        result.push({ ...ranked[k], rank: i + 1, tieCount, points: sharedPts });
+      }
+      i = j;
+    }
+    return result;
+  }
+
+  function App() {
+    const [screen, setScreen] = useState("setup");
+    const [playerNames, setPlayerNames] = useState(["",""]);
+    const [players, setPlayers] = useState([]);
+    const [currentRound, setCurrentRound] = useState(0);
+    const [inputScores, setInputScores] = useState([]);
+    const [error, setError] = useState("");
+    const [savedNames, setSavedNames] = useState([]);
+    const [hasResume, setHasResume] = useState(false);
+    const [confirmNext, setConfirmNext] = useState(false);
+    const [pendingScores, setPendingScores] = useState(null);
+    const [modal, setModal] = useState(null);
+    const [pinInput, setPinInput] = useState("");
+    const [pinError, setPinError] = useState("");
+    const [sheetUrl, setSheetUrl] = useState("");
+    const [sheetUrlInput, setSheetUrlInput] = useState("");
+    const [finalRanked, setFinalRanked] = useState(null);
+    const [playoffPlayers, setPlayoffPlayers] = useState([]);
+    const [leaderboardData, setLeaderboardData] = useState(null);
+    const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+    const [hasSaved, setHasSaved] = useState(false);
+
+    useEffect(() => {
+      setSavedNames(load(NAMES_KEY)||[]);
+      const g = load(SAVE_KEY);
+      if (g && g.screen==="game") setHasResume(true);
+      const url = load(SHEET_URL_KEY)||"";
+      setSheetUrl(url); setSheetUrlInput(url);
+    }, []);
+
+    function resume() {
+      const g = load(SAVE_KEY);
+      if (!g) return;
+      setPlayers(g.players); setCurrentRound(g.currentRound);
+      setInputScores(g.players.map(()=>"")); setScreen("game"); setHasResume(false);
+    }
+
+    function startGame() {
+      const trimmed = playerNames.map(n=>n.trim());
+      if (trimmed.some(n=>!n)) { setError("กรุณากรอกชื่อผู้เล่นให้ครบ"); return; }
+      if (new Set(trimmed).size!==trimmed.length) { setError("ชื่อซ้ำกัน"); return; }
+      setError("");
+      const names = load(NAMES_KEY)||[];
+      const updated = [...new Set([...trimmed,...names])].slice(0,20);
+      save(NAMES_KEY,updated); setSavedNames(updated);
+      const init = trimmed.map((name,i)=>({name,color:COLORS[i%COLORS.length],scores:[]}));
+      setPlayers(init); setCurrentRound(0); setInputScores(trimmed.map(()=>""));
+      save(SAVE_KEY,{screen:"game",players:init,currentRound:0});
+      setScreen("game"); setHasResume(false);
+    }
+
+    function submitRound() {
+      const parsed = inputScores.map(v=>parseFloat(v));
+      if (parsed.some(v=>isNaN(v))) { setError("กรอกคะแนนให้ครบทุกคน"); return; }
+      setError("");
+      const nr = currentRound+1;
+      if (nr >= ROUNDS) {
+        // Last hole - save scores then finish
+        finishGame(players, parsed);
+      } else {
+        setPendingScores(parsed); setConfirmNext(true);
+      }
+    }
+
+    function endGameNow(currentInputScores) {
+      // currentInputScores passed explicitly from GameScreen
+      const parsed = currentInputScores.map(v=>parseFloat(v));
+      if (parsed.some(v=>isNaN(v))) { setError("กรอกคะแนนหลุมนี้ให้ครบก่อนจบเกม"); return; }
+      setError("");
+      const next = players.map((p,i)=>({...p,scores:[...p.scores,parsed[i]]}));
+      setPlayers(next);
+      const ranked = getRank(next);
+      save(SAVE_KEY,null);
+      if (ranked.length > 1 && ranked[0].total === ranked[1].total) {
+        const tied = ranked.filter(p=>p.total===ranked[0].total);
+        setPlayoffPlayers(tied.map(p=>({...p})));
+        setScreen("playoff");
+      } else {
+        setFinalRanked(assignRanksAndPoints(ranked, next.length));
+        setScreen("result");
+      }
+    }
+
+    function finishGame(currentPlayers, lastScores) {
+      const next = currentPlayers.map((p,i)=>({...p,scores:[...p.scores, lastScores ? lastScores[i] : p.scores[p.scores.length-1]]}));
+      const ranked = getRank(next);
+      setPlayers(next);
+      save(SAVE_KEY,null);
+      if (ranked.length > 1 && ranked[0].total === ranked[1].total) {
+        // Tie at 1st - go to playoff with tied players
+        const tied = ranked.filter(p=>p.total===ranked[0].total);
+        setPlayoffPlayers(tied.map(p=>({...p})));
+        setScreen("playoff");
+      } else {
+        setFinalRanked(assignRanksAndPoints(ranked, next.length));
+        setCurrentRound(next[0].scores.length);
+        setScreen("result");
+      }
+    }
+
+    function confirmGoNext() {
+      const next = players.map((p,i)=>({...p,scores:[...p.scores,pendingScores[i]]}));
+      const nr = currentRound+1;
+      setPlayers(next);
+      save(SAVE_KEY,{screen:"game",players:next,currentRound:nr});
+      setCurrentRound(nr); setInputScores(players.map(()=>""));
+      setConfirmNext(false); setPendingScores(null);
+    }
+
+    function editScore(pi,ri,val) {
+      const v=parseFloat(val); if(isNaN(v)) return;
+      const next=players.map((p,i)=>{ if(i!==pi) return p; const s=[...p.scores]; s[ri]=v; return {...p,scores:s}; });
+      setPlayers(next); save(SAVE_KEY,{screen:"game",players:next,currentRound});
+    }
+
+    function finishPlayoff(sortedPlayers) {
+      const totalPlayers = players.length;
+      // Recalculate total from scores to ensure accuracy
+      const recalculated = sortedPlayers.map(p => ({
+        ...p,
+        total: p.scores ? p.scores.reduce((a,b)=>a+(b||0),0) : p.total
+      }));
+      // Re-sort: playoff winner first, then by recalculated total
+      recalculated.sort((a,b) => {
+        if (a._playoffWinner) return -1;
+        if (b._playoffWinner) return 1;
+        return a.total - b.total;
+      });
+      setPlayers(recalculated);
+      setFinalRanked(assignRanksAndPoints(recalculated, totalPlayers));
+      setScreen("result");
+    }
+
+    function restart() {
+      save(SAVE_KEY,null); setScreen("setup"); setPlayerNames(["",""]); setPlayers([]);
+      setCurrentRound(0); setInputScores([]); setError(""); setHasResume(false);
+      setFinalRanked(null); setPlayoffPlayers([]); setHasSaved(false);
+    }
+
+    function openSaveModal() { if(hasSaved) return; setPinInput(""); setPinError(""); setModal("confirm_save"); }
+    function openSettingsModal() { setPinInput(""); setPinError(""); setModal("pin_settings"); }
+
+    function checkPinSave() {
+      if (pinInput===ADMIN_PIN) { setModal("saving"); setPinError(""); sendToSheet(); }
+      else setPinError("PIN ไม่ถูกต้อง");
+    }
+    function checkPinSettings() {
+      if (pinInput===ADMIN_PIN) { setModal("settings"); setPinError(""); }
+      else setPinError("PIN ไม่ถูกต้อง");
+    }
+    function saveSettings() { save(SHEET_URL_KEY,sheetUrlInput); setSheetUrl(sheetUrlInput); setModal(null); }
+
+    async function sendToSheet() {
+      if (!sheetUrl) { setModal("no_url"); return; }
+      setHasSaved(true);
+      const ranked = finalRanked || assignRanksAndPoints(getRank(players), players.length);
+      const now = new Date();
+      const date = now.getDate()+"/"+(now.getMonth()+1)+"/"+now.getFullYear();
+      const holesPlayed = ranked[0]?.scores?.length || currentRound;
+      const playerCount = ranked.length;
+      const rows = ranked.map(p=>({
+        date, holesPlayed, playerCount,
+        name: p.name, rank: p.rank, score: p.total, points: p.points
+      }));
+      try {
+        await fetch(sheetUrl, { method:"POST", mode:"no-cors", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rows}) });
+        setModal("saved");
+      } catch(e) { setModal("error"); }
+    }
+
+    async function loadLeaderboard() {
+      setLeaderboardLoading(true);
+      setLeaderboardData(null);
+      const url = load(SHEET_URL_KEY)||"";
+      if (!url) { setLeaderboardLoading(false); setLeaderboardData({error:"no_url"}); return; }
+      try {
+        const res = await fetch(url+"?action=leaderboard");
+        const data = await res.json();
+        setLeaderboardData(data);
+      } catch(e) { setLeaderboardData({error:"fetch"}); }
+      setLeaderboardLoading(false);
+    }
+
+    function openLeaderboard() { setScreen("leaderboard"); loadLeaderboard(); }
+
+    const ranked = players.length ? getRank(players) : [];
+
+    return (
+      <div style={S.root}><div style={S.card}>
+        {screen==="setup" && <SetupScreen playerNames={playerNames} savedNames={savedNames}
+          onAdd={()=>playerNames.length<9&&setPlayerNames([...playerNames,""])}
+          onRemove={i=>playerNames.length>2&&setPlayerNames(playerNames.filter((_,idx)=>idx!==i))}
+          onUpdate={(i,v)=>{const n=[...playerNames];n[i]=v;setPlayerNames(n);}}
+          onStart={startGame} error={error} hasResume={hasResume} onResume={resume}
+          onSettings={openSettingsModal} onLeaderboard={openLeaderboard}
+        />}
+        {screen==="game" && <GameScreen players={players} currentRound={currentRound}
+          inputScores={inputScores} setInputScores={setInputScores}
+          onSubmit={submitRound} error={error} ranked={ranked}
+          onEdit={editScore} onRestart={restart} onSave={openSaveModal}
+          onEndGame={endGameNow} hasSaved={hasSaved}
+        />}
+        {screen==="playoff" && <PlayoffScreen
+          playoffPlayers={playoffPlayers}
+          setPlayoffPlayers={setPlayoffPlayers}
+          allPlayers={players}
+          onFinish={finishPlayoff}
+          onRestart={restart}
+        />}
+        {screen==="result" && <ResultScreen
+          ranked={finalRanked||assignRanksAndPoints(getRank(players),players.length)}
+          onRestart={restart} onSave={openSaveModal} onLeaderboard={openLeaderboard} hasSaved={hasSaved}
+        />}
+        {screen==="leaderboard" && <LeaderboardScreen
+          data={leaderboardData} loading={leaderboardLoading}
+          onBack={()=>setScreen(finalRanked?"result":"setup")}
+          onRefresh={loadLeaderboard}
+        />}
+
+        {/* Confirm next hole */}
+        {confirmNext&&(
+          <div className="overlay"><div className="modal">
+            <div style={{fontSize:40,marginBottom:12}}>⛳</div>
+            <p style={{fontSize:21,fontWeight:700,color:"#fff",margin:"0 0 6px"}}>หลุมที่ {currentRound+1} จบแล้ว?</p>
+            <p style={{fontSize:16,color:"rgba(255,255,255,0.6)",margin:"0 0 24px"}}>ขึ้นหลุมที่ {currentRound+2} เลยไหม?</p>
+            <button onClick={confirmGoNext} style={{...S.startBtn,marginTop:0,marginBottom:10}}>⛳ ขึ้นหลุมที่ {currentRound+2}</button>
+            <button onClick={()=>{setConfirmNext(false);setPendingScores(null);}} style={S.cancelBtn}>← แก้ไขคะแนนก่อน</button>
+          </div></div>
+        )}
+
+        {/* Confirm once before save */}
+        {modal==="confirm_save"&&(
+          <div className="overlay"><div className="modal">
+            <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
+            <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 8px"}}>ส่งข้อมูลได้ครั้งเดียว</p>
+            <p style={{fontSize:15,color:"rgba(255,255,255,0.6)",margin:"0 0 24px"}}>เมื่อยืนยันแล้วจะส่งผลเกมนี้เข้า Google Sheet และไม่สามารถส่งซ้ำได้อีก</p>
+            <button onClick={()=>setModal("pin_save")} style={{...S.startBtn,marginTop:0,marginBottom:10}}>ยืนยัน ส่งข้อมูล</button>
+            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ยกเลิก</button>
+          </div></div>
+        )}
+
+        {/* PIN save */}
+        {modal==="pin_save"&&(
+          <div className="overlay"><div className="modal">
+            <div style={{fontSize:36,marginBottom:10}}>🔐</div>
+            <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 6px"}}>ใส่ PIN แอดมิน</p>
+            <p style={{fontSize:15,color:"rgba(255,255,255,0.5)",margin:"0 0 18px"}}>เพื่อบันทึกผลเข้า Google Sheet</p>
+            <input type="password" inputMode="numeric" maxLength={6} value={pinInput} onChange={e=>setPinInput(e.target.value)}
+              style={{...S.scoreInput,width:"100%",fontSize:28,letterSpacing:8,marginBottom:8}} placeholder="••••••" autoFocus/>
+            {pinError&&<p style={{color:"#ff6b6b",margin:"0 0 10px",fontSize:15}}>{pinError}</p>}
+            <button onClick={checkPinSave} style={{...S.startBtn,marginTop:8,marginBottom:10}}>ยืนยัน</button>
+            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ยกเลิก</button>
+          </div></div>
+        )}
+
+        {/* PIN settings */}
+        {modal==="pin_settings"&&(
+          <div className="overlay"><div className="modal">
+            <div style={{fontSize:36,marginBottom:10}}>⚙️</div>
+            <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 18px"}}>ใส่ PIN แอดมิน</p>
+            <input type="password" inputMode="numeric" maxLength={6} value={pinInput} onChange={e=>setPinInput(e.target.value)}
+              style={{...S.scoreInput,width:"100%",fontSize:28,letterSpacing:8,marginBottom:8}} placeholder="••••••" autoFocus/>
+            {pinError&&<p style={{color:"#ff6b6b",margin:"0 0 10px",fontSize:15}}>{pinError}</p>}
+            <button onClick={checkPinSettings} style={{...S.startBtn,marginTop:8,marginBottom:10}}>ยืนยัน</button>
+            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ยกเลิก</button>
+          </div></div>
+        )}
+
+        {/* Settings */}
+        {modal==="settings"&&(
+          <div className="overlay"><div className="modal" style={{textAlign:"left"}}>
+            <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 18px",textAlign:"center"}}>⚙️ ตั้งค่า</p>
+            <p style={{fontSize:14,color:"rgba(255,255,255,0.5)",margin:"0 0 8px"}}>Google Apps Script URL</p>
+            <input value={sheetUrlInput} onChange={e=>setSheetUrlInput(e.target.value)}
+              style={{...S.input,fontSize:13,padding:"10px 12px",marginBottom:16}}
+              placeholder="https://script.google.com/macros/s/.../exec"/>
+            <button onClick={saveSettings} style={{...S.startBtn,marginTop:0,marginBottom:10}}>บันทึก</button>
+            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ปิด</button>
+          </div></div>
+        )}
+
+        {modal==="saving"&&<div className="overlay"><div className="modal"><div style={{fontSize:40,marginBottom:12}}>⏳</div><p style={{color:"#fff",fontSize:18}}>กำลังบันทึก...</p></div></div>}
+
+        {modal==="saved"&&(
+          <div className="overlay"><div className="modal">
+            <div style={{fontSize:40,marginBottom:12}}>✅</div>
+            <p style={{color:"#fff",fontSize:20,fontWeight:700,margin:"0 0 6px"}}>บันทึกสำเร็จ!</p>
+            <p style={{color:"rgba(255,255,255,0.6)",fontSize:15,margin:"0 0 20px"}}>ผลเกมถูกส่งไปยัง Google Sheet แล้ว</p>
+            <button onClick={()=>{setModal(null); openLeaderboard();}} style={{...S.startBtn,marginTop:0,marginBottom:10}}>🏆 ดูตารางคะแนน</button>
+            <button onClick={()=>setModal(null)} style={S.cancelBtn}>ปิด</button>
+          </div></div>
+        )}
+
+        {modal==="error"&&<div className="overlay"><div className="modal"><div style={{fontSize:40,marginBottom:12}}>❌</div><p style={{color:"#fff",fontSize:18,fontWeight:700,margin:"0 0 6px"}}>บันทึกไม่สำเร็จ</p><p style={{color:"rgba(255,255,255,0.5)",fontSize:14,margin:"0 0 20px"}}>ตรวจสอบ URL ใน Settings</p><button onClick={()=>setModal(null)} style={{...S.startBtn,marginTop:0}}>ปิด</button></div></div>}
+        {modal==="no_url"&&<div className="overlay"><div className="modal"><div style={{fontSize:40,marginBottom:12}}>⚠️</div><p style={{color:"#fff",fontSize:18,fontWeight:700,margin:"0 0 6px"}}>ยังไม่ได้ตั้งค่า URL</p><p style={{color:"rgba(255,255,255,0.5)",fontSize:14,margin:"0 0 20px"}}>ไปที่ ⚙️ ตั้งค่า แล้วใส่ URL ก่อน</p><button onClick={()=>setModal(null)} style={{...S.startBtn,marginTop:0}}>ปิด</button></div></div>}
+      </div></div>
+    );
+  }
+
+  function NameInput({ value, onChange, placeholder, savedNames }) {
+    const [open,setOpen]=useState(false);
+    const ref=useRef();
+    const filtered=savedNames.filter(n=>n.toLowerCase().includes(value.toLowerCase())&&n!==value);
+    useEffect(()=>{
+      const h=e=>{ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); };
+      document.addEventListener("touchstart",h); document.addEventListener("mousedown",h);
+      return ()=>{ document.removeEventListener("touchstart",h); document.removeEventListener("mousedown",h); };
+    },[]);
+    return (
+      <div style={{position:"relative",flex:1}} ref={ref}>
+        <input style={S.input} placeholder={placeholder} value={value}
+          onChange={e=>{onChange(e.target.value);setOpen(true);}} onFocus={()=>setOpen(true)} maxLength={16}/>
+        {open&&filtered.length>0&&(
+          <div className="dd-list">
+            {filtered.map(name=>(
+              <div key={name} className="dd-item"
+                onMouseDown={()=>{onChange(name);setOpen(false);}}
+                onTouchEnd={e=>{e.preventDefault();onChange(name);setOpen(false);}}>{name}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function SetupScreen({ playerNames, savedNames, onAdd, onRemove, onUpdate, onStart, error, hasResume, onResume, onSettings, onLeaderboard }) {
+    return (
+      <div>
+        <div className="hero-wrap">
+          <img className="hero-img" src={HERO_IMG} alt="FootGolf"/>
+          <div className="hero-text"><h1>⛳ FootGolf</h1><p>Phonphisai Footgolf Club</p></div>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:-12,marginBottom:16}}>
+          <button onClick={onLeaderboard} style={{background:"rgba(255,214,0,0.15)",border:"1px solid rgba(255,214,0,0.3)",color:"#FFD700",fontSize:14,cursor:"pointer",padding:"7px 14px",borderRadius:10,fontWeight:600}}>🏆 ตารางคะแนน</button>
+          <button onClick={onSettings} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"rgba(255,255,255,0.5)",fontSize:13,cursor:"pointer",padding:"7px 12px",borderRadius:10}}>⚙️ ตั้งค่า</button>
+        </div>
+        {hasResume&&<button style={{...S.startBtn,background:"linear-gradient(135deg,#11998e,#38ef7d)",marginBottom:14}} onClick={onResume}>▶️ เล่นต่อจากเดิม</button>}
+        <div style={{marginBottom:16}}>
+          {playerNames.map((name,i)=>(
+            <div key={i} style={S.playerRow}>
+              <div style={{...S.dot,background:COLORS[i%COLORS.length]}}/>
+              <NameInput value={name} onChange={v=>onUpdate(i,v)} placeholder={"ผู้เล่น "+(i+1)} savedNames={savedNames}/>
+              {playerNames.length>2&&<button style={S.iconBtn} onClick={()=>onRemove(i)}>✕</button>}
+            </div>
+          ))}
+        </div>
+        {playerNames.length<9&&<button style={S.addBtn} onClick={onAdd}>+ เพิ่มผู้เล่น</button>}
+        {error&&<p style={S.error}>{error}</p>}
+        <button style={S.startBtn} onClick={onStart}>เริ่มเกม →</button>
+      </div>
+    );
+  }
+
+  function GameScreen({ players, currentRound, inputScores, setInputScores, onSubmit, error, ranked, onEdit, onRestart, onSave, onEndGame, hasSaved }) {
+    const [tab,setTab]=useState("input");
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{fontSize:22,fontWeight:700}}>⛳ หลุมที่ {currentRound+1} / {ROUNDS}</div>
+          <button onClick={onRestart} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"rgba(255,255,255,0.6)",fontSize:13,cursor:"pointer",padding:"6px 12px",borderRadius:8}}>✕ เริ่มใหม่</button>
+        </div>
+        <div style={S.progressBar}><div style={{...S.progressFill,width:((currentRound/ROUNDS)*100)+"%"}}/></div>
+        <div style={S.tabRow}>
+          <button style={{...S.tab,...(tab==="input"?S.tabActive:{})}} onClick={()=>setTab("input")}>✏️ กรอกคะแนน</button>
+          <button style={{...S.tab,...(tab==="history"?S.tabActive:{})}} onClick={()=>setTab("history")}>📊 ย้อนหลัง</button>
+        </div>
+        {tab==="input"&&<>
+          {currentRound>0&&<div style={S.leaderboard}>
+            <p style={S.leaderTitle}>🏅 อันดับปัจจุบัน</p>
+            {ranked.map((p,i)=>(
+              <div key={p.name} style={{...S.leaderRow,borderLeft:"3px solid "+p.color}}>
+                <span style={S.rank}>{i===0?"👑":"#"+(i+1)}</span>
+                <span style={S.leaderName}>{p.name}</span>
+                <span style={S.leaderScore}>{p.total} แต้ม</span>
+              </div>
+            ))}
+          </div>}
+          <p style={S.inputLabel}>กรอกคะแนนหลุมที่ {currentRound+1}</p>
+          {players.map((p,i)=>(
+            <div key={p.name} style={S.scoreRow}>
+              <div style={{...S.dot,background:p.color}}/>
+              <span style={S.scoreName}>{p.name}</span>
+              <input style={S.scoreInput} type="number" inputMode="decimal" placeholder="0"
+                value={inputScores[i]} onChange={e=>{const n=[...inputScores];n[i]=e.target.value;setInputScores(n);}}/>
+            </div>
+          ))}
+          {error&&<p style={S.error}>{error}</p>}
+          {currentRound+1===ROUNDS ? (
+            <button style={S.startBtn} onClick={onSubmit}>บันทึกหลุม {currentRound+1} และจบเกม 🎯</button>
+          ) : (
+            <button style={S.startBtn} onClick={onSubmit}>บันทึก →</button>
+          )}
+          {currentRound>=8&&currentRound+1<ROUNDS&&(
+            <button onClick={()=>onEndGame(inputScores)} style={{...S.startBtn,background:"linear-gradient(135deg,#c0392b,#e74c3c)",marginTop:10}}>
+              🏁 จบเกมที่หลุม {currentRound+1}
+            </button>
+          )}
+        </>}
+        {tab==="history"&&<HistoryTable players={players} currentRound={currentRound} onEdit={onEdit}/>}
+      </div>
+    );
+  }
+
+  function PlayoffScreen({ playoffPlayers, setPlayoffPlayers, allPlayers, onFinish, onRestart }) {
+    const [round, setRound] = useState(1);
+    const [inputs, setInputs] = useState(playoffPlayers.map(()=>""));
+    const [error, setError] = useState("");
+
+    function submit() {
+      const parsed = inputs.map(v => parseFloat(v));
+      if (parsed.some(v => isNaN(v))) { setError("กรอกคะแนนให้ครบทุกคน"); return; }
+      setError("");
+
+      // playoffScores = cumulative playoff scores per player
+      const updatedPlayoff = playoffPlayers.map((p, i) => ({
+        ...p,
+        playoffTotal: (p.playoffTotal || 0) + parsed[i]
+      }));
+
+      const minPlayoff = Math.min(...updatedPlayoff.map(p => p.playoffTotal));
+      const winners = updatedPlayoff.filter(p => p.playoffTotal === minPlayoff);
+
+      if (winners.length === 1) {
+        // Clear playoff winner found
+        const winnerName = winners[0].name;
+        // Rebuild all players - recalculate total from scores
+        const finalList = allPlayers.map(p => ({
+          ...p,
+          total: p.scores ? p.scores.reduce((a,b)=>a+(b||0),0) : p.total,
+          _playoffWinner: p.name === winnerName
+        }));
+        // Sort: winner first, then rest by recalculated total ascending
+        finalList.sort((a, b) => {
+          if (a._playoffWinner) return -1;
+          if (b._playoffWinner) return 1;
+          return a.total - b.total;
+        });
+        onFinish(finalList);
+      } else {
+        // Still tied — continue playoff with only tied winners
+        setRound(r => r + 1);
+        setPlayoffPlayers(winners.map(p => ({ ...p })));
+        setInputs(winners.map(() => ""));
+      }
+    }
+
+    return (
+      <div>
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <div style={{fontSize:44,marginBottom:8}}>⚡</div>
+          <h2 style={{fontSize:26,fontWeight:800,margin:"0 0 6px",color:"#FFD700"}}>PLAYOFF</h2>
+          <p style={{fontSize:15,color:"rgba(255,255,255,0.6)",margin:0}}>รอบที่ {round} · คะแนนเท่ากัน ต้องชิงกัน!</p>
+        </div>
+        <div style={{background:"rgba(255,214,0,0.08)",borderRadius:14,padding:"14px 16px",marginBottom:20,border:"1px solid rgba(255,214,0,0.2)"}}>
+          <p style={{fontSize:13,color:"rgba(255,214,0,0.8)",margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"1px"}}>ผู้เล่นที่ต้อง Playoff</p>
+          {playoffPlayers.map(p=>(
+            <div key={p.name} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <div style={{...S.dot,background:p.color}}/>
+              <span style={{fontSize:18,fontWeight:600}}>{p.name}</span>
+              <span style={{marginLeft:"auto",fontSize:15,color:"rgba(255,255,255,0.5)"}}>คะแนนรวม {p.total}</span>
+            </div>
+          ))}
+        </div>
+        <p style={S.inputLabel}>กรอกคะแนน Playoff รอบที่ {round}</p>
+        {playoffPlayers.map((p,i)=>(
+          <div key={p.name} style={S.scoreRow}>
+            <div style={{...S.dot,background:p.color}}/>
+            <span style={S.scoreName}>{p.name}</span>
+            <input style={S.scoreInput} type="number" inputMode="decimal" placeholder="0"
+              value={inputs[i]} onChange={e=>{const n=[...inputs];n[i]=e.target.value;setInputs(n);}}/>
+          </div>
+        ))}
+        {error&&<p style={S.error}>{error}</p>}
+        <button style={{...S.startBtn,background:"linear-gradient(135deg,#e8a020,#c77800)"}} onClick={submit}>บันทึก Playoff →</button>
+        <button onClick={onRestart} style={{...S.cancelBtn,marginTop:10}}>✕ เริ่มเกมใหม่</button>
+      </div>
+    );
+  }
+
+    function HistoryTable({ players, currentRound, onEdit }) {
+    const [editing,setEditing]=useState(null);
+    const [editVal,setEditVal]=useState("");
+    if(currentRound===0) return <p style={{color:"rgba(255,255,255,0.4)",textAlign:"center",marginTop:24,fontSize:17}}>ยังไม่มีคะแนนย้อนหลัง</p>;
+    const totals=players.map(p=>p.scores.reduce((a,b)=>a+b,0));
+    function doConfirm(){if(editing){onEdit(editing.pi,editing.ri,editVal);setEditing(null);}}
+    const half=9,firstHalf=Math.min(currentRound,half),secondHalf=currentRound>half?currentRound-half:0;
+    return (
+      <div>
+        <p style={{fontSize:14,color:"rgba(255,255,255,0.4)",textAlign:"center",margin:"0 0 10px"}}>กดที่ตัวเลขเพื่อแก้ไข</p>
+        {[0,half].map(offset=>{
+          const cols=offset===0?firstHalf:secondHalf;
+          if(cols===0) return null;
+          const showTotal=(offset===0&&secondHalf===0)||(offset===half);
+          return (
+            <div key={offset} style={{marginBottom:offset===0&&secondHalf>0?16:0}}>
+              {secondHalf>0&&<p style={{fontSize:13,color:"rgba(255,255,255,0.5)",margin:"0 0 8px",textAlign:"center"}}>── หลุม {offset+1}–{offset+cols} ──</p>}
+              <div style={{overflowX:"auto"}}>
+                <table style={S.table}><thead><tr>
+                  <th style={{...S.th,textAlign:"left"}}>ผู้เล่น</th>
+                  {Array.from({length:cols},(_,i)=><th key={i} style={S.th}>H{offset+i+1}</th>)}
+                  {showTotal&&<th style={{...S.th,color:"#FFD700"}}>รวม</th>}
+                </tr></thead><tbody>
+                  {players.map((p,pi)=>(
+                    <tr key={p.name}>
+                      <td style={S.td}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{...S.dot,background:p.color}}/><span style={{fontSize:16}}>{p.name}</span></div></td>
+                      {p.scores.slice(offset,offset+cols).map((sc,ri)=>(
+                        <td key={ri} style={{...S.td,textAlign:"center"}}>
+                          {editing&&editing.pi===pi&&editing.ri===(offset+ri)
+                            ?<input autoFocus style={{width:48,background:"rgba(255,255,255,0.15)",border:"1px solid #228b44",borderRadius:8,padding:"3px",color:"#fff",fontSize:15,textAlign:"center",outline:"none"}} type="number" inputMode="decimal" value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={doConfirm} onKeyDown={e=>e.key==="Enter"&&doConfirm()}/>
+                            :<span style={{fontSize:15,cursor:"pointer",padding:"4px 6px",borderRadius:6,display:"inline-block",background:"rgba(255,255,255,0.06)"}} onClick={()=>{setEditing({pi,ri:offset+ri});setEditVal(String(sc));}}>{sc}</span>
+                          }
+                        </td>
+                      ))}
+                      {showTotal&&<td style={{...S.td,textAlign:"center",fontWeight:700,color:"#FFD700",fontSize:17}}>{totals[pi]}</td>}
+                    </tr>
+                  ))}
+                </tbody></table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function ResultScreen({ ranked, onRestart, onSave, onLeaderboard, hasSaved }) {
+    const medals=["🥇","🥈","🥉"];
+    const [showHistory,setShowHistory]=useState(false);
+    return (
+      <div>
+        <div style={S.header}>
+          <div style={{fontSize:52,marginBottom:8}}>🏆</div>
+          <h1 style={S.title}>จบเกม!</h1>
+          <p style={S.subtitle}>ครบ {ranked[0]?.scores?.length||18} หลุม · คะแนนน้อยสุดชนะ</p>
+        </div>
+        {ranked.map((p,i)=>{
+          const isShared = p.tieCount > 1 && p.rank !== 1;
+          const rankLabel = isShared ? ("ที่ " + p.rank + " ร่วม") : ("ที่ " + p.rank);
+          return (
+            <div key={p.name} style={{...S.resultRow,background:p.rank===1?"rgba(255,214,0,0.12)":"rgba(255,255,255,0.04)",borderColor:p.rank===1?"#FFD700":"rgba(255,255,255,0.1)"}}>
+              <span style={S.medal}>{medals[p.rank-1]||"#"+p.rank}</span>
+              <div style={{...S.dot,background:p.color,marginRight:6}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:18,fontWeight:500}}>{p.name}</div>
+                <div style={{fontSize:13,color:"rgba(255,255,255,0.5)"}}>{rankLabel} · +{p.points} แต้มสะสม</div>
+              </div>
+              <span style={S.totalScore}>{p.total}</span>
+            </div>
+          );
+        })}
+        <button onClick={hasSaved ? undefined : onSave} style={{...S.startBtn,background:hasSaved?"rgba(255,255,255,0.15)":"linear-gradient(135deg,#e8a020,#c77800)",marginTop:16,opacity:hasSaved?0.6:1,cursor:hasSaved?"default":"pointer"}}>
+          {hasSaved ? "✅ บันทึกแล้ว" : "📊 บันทึกผลเข้า Google Sheet"}
+        </button>
+        <button onClick={onLeaderboard} style={{...S.startBtn,background:"linear-gradient(135deg,#667eea,#764ba2)",marginTop:10}}>🏆 ดูตารางคะแนน</button>
+        <button style={S.historyToggle} onClick={()=>setShowHistory(!showHistory)}>{showHistory?"▲ ซ่อนตารางคะแนน":"📋 ดูคะแนนย้อนหลัง"}</button>
+        {showHistory&&<HistoryTable players={ranked} currentRound={ranked[0]?.scores?.length||18} onEdit={()=>{}}/>}
+        <button style={{...S.startBtn,marginTop:12}} onClick={onRestart}>🔄 เริ่มเกมใหม่</button>
+      </div>
+    );
+  }
+
+  function LeaderboardScreen({ data, loading, onBack, onRefresh }) {
+    const [tab,setTab]=useState("stats");
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
+          <button onClick={onBack} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#fff",fontSize:20,cursor:"pointer",width:36,height:36,borderRadius:10}}>←</button>
+          <div style={{flex:1}}>
+            <h2 style={{fontSize:22,fontWeight:800,margin:0}}>🏆 ตารางคะแนน</h2>
+            <p style={{fontSize:13,color:"rgba(255,255,255,0.5)",margin:0}}>Phonphisai Footgolf Club</p>
+          </div>
+          <button onClick={onRefresh} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#fff",fontSize:18,cursor:"pointer",width:36,height:36,borderRadius:10}}>↻</button>
+        </div>
+        <div style={S.tabRow}>
+          <button style={{...S.tab,...(tab==="stats"?S.tabActive:{})}} onClick={()=>setTab("stats")}>🏅 แต้มสะสม</button>
+          <button style={{...S.tab,...(tab==="history"?S.tabActive:{})}} onClick={()=>setTab("history")}>📋 ประวัติ</button>
+        </div>
+        {loading&&<div style={{textAlign:"center",padding:40,color:"rgba(255,255,255,0.5)",fontSize:16}}>⏳ กำลังโหลด...</div>}
+        {!loading&&data?.error&&(
+          <div style={{textAlign:"center",padding:40}}>
+            <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
+            <p style={{color:"rgba(255,255,255,0.6)",fontSize:16}}>{data.error==="no_url"?"ยังไม่ได้ตั้งค่า URL":"โหลดข้อมูลไม่สำเร็จ"}</p>
+            <button onClick={onRefresh} style={{...S.startBtn,marginTop:16}}>ลองใหม่</button>
+          </div>
+        )}
+        {!loading&&data&&!data.error&&tab==="stats"&&(
+          <div style={{overflowX:"auto"}}>
+            <table style={S.table}><thead><tr>
+              <th style={S.th}>#</th>
+              <th style={{...S.th,textAlign:"left"}}>ชื่อ</th>
+              <th style={{...S.th,color:"#FFD700"}}>แต้ม</th>
+              <th style={S.th}>🏆</th>
+              <th style={S.th}>แข่ง</th>
+            </tr></thead><tbody>
+              {(data.stats||[]).map((p,i)=>(
+                <tr key={p.name} style={{background:i===0?"rgba(255,214,0,0.08)":"transparent"}}>
+                  <td style={{...S.td,textAlign:"center",fontWeight:700,color:i===0?"#FFD700":"#fff"}}>{i+1}</td>
+                  <td style={{...S.td,fontSize:17}}>{p.name}</td>
+                  <td style={{...S.td,textAlign:"center",fontWeight:700,color:"#FFD700",fontSize:17}}>{p.totalPoints}</td>
+                  <td style={{...S.td,textAlign:"center",fontSize:15}}>{p.wins}</td>
+                  <td style={{...S.td,textAlign:"center",fontSize:15,color:"rgba(255,255,255,0.6)"}}>{p.games}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+        )}
+        {!loading&&data&&!data.error&&tab==="history"&&(
+          <div style={{overflowX:"auto"}}>
+            <table style={S.table}><thead><tr>
+              <th style={{...S.th,textAlign:"left"}}>วันที่</th>
+              <th style={{...S.th,textAlign:"left"}}>ชื่อ</th>
+              <th style={S.th}>อันดับ</th>
+              <th style={S.th}>หลุม</th>
+              <th style={S.th}>คะแนน</th>
+              <th style={{...S.th,color:"#FFD700"}}>แต้ม</th>
+            </tr></thead><tbody>
+              {(data.history||[]).map((r,i)=>(
+                <tr key={i}>
+                  <td style={{...S.td,fontSize:13,color:"rgba(255,255,255,0.6)",whiteSpace:"nowrap"}}>{String(r.date).split(" ").slice(0,4).join(" ")}</td>
+                  <td style={{...S.td,fontSize:16}}>{r.name}</td>
+                  <td style={{...S.td,textAlign:"center",fontSize:15}}>{r.rank===1?"🥇":r.rank===2?"🥈":r.rank===3?"🥉":r.rank}</td>
+                  <td style={{...S.td,textAlign:"center",fontSize:14,color:"rgba(255,255,255,0.6)"}}>{r.holesPlayed}</td>
+                  <td style={{...S.td,textAlign:"center",fontSize:15}}>{r.score}</td>
+                  <td style={{...S.td,textAlign:"center",fontWeight:700,color:"#FFD700",fontSize:15}}>{r.points}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const S = {
+    root:{minHeight:"100vh",background:"linear-gradient(135deg,#0d3d1f 0%,#1a5c33 50%,#0d3d1f 100%)",display:"flex",justifyContent:"center",alignItems:"flex-start",padding:"20px 16px 40px",fontFamily:"'Segoe UI','Helvetica Neue',sans-serif"},
+    card:{width:"100%",maxWidth:480,background:"rgba(255,255,255,0.05)",borderRadius:24,padding:"32px 24px",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,0.1)",boxShadow:"0 20px 60px rgba(0,0,0,0.4)",color:"#fff"},
+    header:{textAlign:"center",marginBottom:24},
+    title:{fontSize:32,fontWeight:700,margin:"0 0 6px"},
+    subtitle:{fontSize:16,color:"rgba(255,255,255,0.5)",margin:0},
+    playerRow:{display:"flex",alignItems:"center",gap:12,marginBottom:12},
+    dot:{width:14,height:14,borderRadius:"50%",flexShrink:0},
+    input:{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:14,padding:"13px 16px",color:"#fff",fontSize:18,outline:"none"},
+    iconBtn:{background:"rgba(255,80,80,0.2)",border:"none",color:"#ff6b6b",width:40,height:40,borderRadius:10,cursor:"pointer",fontSize:16,flexShrink:0},
+    addBtn:{width:"100%",padding:"13px",background:"rgba(255,255,255,0.06)",border:"1px dashed rgba(255,255,255,0.2)",borderRadius:14,color:"rgba(255,255,255,0.6)",fontSize:17,cursor:"pointer",marginBottom:18},
+    startBtn:{width:"100%",padding:"17px",background:"linear-gradient(135deg,#228b44,#1a6b3a)",border:"none",borderRadius:16,color:"#fff",fontSize:18,fontWeight:700,cursor:"pointer",marginTop:10},
+    cancelBtn:{width:"100%",padding:"13px",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:14,color:"rgba(255,255,255,0.7)",fontSize:16,cursor:"pointer"},
+    error:{color:"#ff6b6b",fontSize:16,textAlign:"center",margin:"10px 0"},
+    progressBar:{height:8,background:"rgba(255,255,255,0.1)",borderRadius:99,overflow:"hidden",marginBottom:22},
+    progressFill:{height:"100%",background:"linear-gradient(90deg,#228b44,#4caf50)",borderRadius:99,transition:"width 0.4s ease"},
+    leaderboard:{background:"rgba(255,255,255,0.04)",borderRadius:16,padding:"14px 16px",marginBottom:22},
+    leaderTitle:{fontSize:14,color:"rgba(255,255,255,0.5)",margin:"0 0 12px",textTransform:"uppercase",letterSpacing:"1px"},
+    leaderRow:{display:"flex",alignItems:"center",gap:10,padding:"11px 12px",marginBottom:8,borderRadius:12,background:"rgba(255,255,255,0.03)"},
+    rank:{fontSize:20,width:30},
+    leaderName:{flex:1,fontSize:19},
+    leaderScore:{fontSize:18,color:"rgba(255,255,255,0.8)"},
+    inputLabel:{fontSize:17,color:"rgba(255,255,255,0.6)",marginBottom:14,marginTop:0},
+    scoreRow:{display:"flex",alignItems:"center",gap:12,marginBottom:14},
+    scoreName:{flex:1,fontSize:20},
+    scoreInput:{width:96,background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:12,padding:"12px 10px",color:"#fff",fontSize:22,outline:"none",textAlign:"center"},
+    resultRow:{display:"flex",alignItems:"center",gap:8,padding:"14px 16px",borderRadius:16,border:"1px solid",marginBottom:10},
+    medal:{fontSize:26,width:34,textAlign:"center"},
+    totalScore:{fontSize:24,fontWeight:700},
+    tabRow:{display:"flex",gap:14,marginBottom:22},
+    tab:{flex:1,padding:"14px 8px",borderRadius:14,border:"1px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.05)",color:"rgba(255,255,255,0.5)",fontSize:17,cursor:"pointer"},
+    tabActive:{background:"rgba(34,139,68,0.3)",border:"1px solid #228b44",color:"#fff",fontWeight:700},
+    table:{width:"100%",borderCollapse:"collapse"},
+    th:{padding:"10px 6px",color:"rgba(255,255,255,0.6)",fontSize:14,borderBottom:"1px solid rgba(255,255,255,0.1)",textAlign:"center",whiteSpace:"nowrap"},
+    td:{padding:"11px 6px",borderBottom:"1px solid rgba(255,255,255,0.06)"},
+    historyToggle:{width:"100%",marginTop:12,padding:"14px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:14,color:"rgba(255,255,255,0.8)",fontSize:17,cursor:"pointer"},
+  };
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
