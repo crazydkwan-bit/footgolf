@@ -564,20 +564,31 @@
             ))}
           </div>}
           <p style={S.inputLabel}>กรอกคะแนนหลุมที่ {currentRound+1}</p>
-          {players.map((p,i)=>(
-            <div key={p.name} style={S.scoreRow}>
-              <div style={{...S.dot,background:p.color}}/>
-              <span style={S.scoreName}>{p.name}</span>
-              <input style={S.scoreInput} type="number" inputMode="decimal" placeholder="0"
-                value={inputScores[i]} onChange={e=>{const n=[...inputScores];n[i]=e.target.value;setInputScores(n);}}/>
-            </div>
-          ))}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {players.map((p,i)=>(
+              <div key={p.name} style={{background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"8px 6px 10px",textAlign:"center"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4,marginBottom:6}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:p.color,flexShrink:0}}/>
+                  <span style={{fontSize:13,fontWeight:600,maxWidth:72,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
+                </div>
+                <input style={{width:"100%",background:"rgba(0,0,0,0.2)",border:"1px solid rgba(255,255,255,0.18)",borderRadius:8,padding:"8px 2px",color:"#fff",fontSize:24,fontWeight:700,textAlign:"center",outline:"none",boxSizing:"border-box"}}
+                  type="number" inputMode="numeric" placeholder="0"
+                  value={inputScores[i]} onChange={e=>{const n=[...inputScores];n[i]=e.target.value;setInputScores(n);}}/>
+              </div>
+            ))}
+            {currentRound+1===ROUNDS ? (
+              <div onClick={onSubmit} style={{background:"rgba(34,139,68,0.25)",border:"1px solid rgba(34,139,68,0.5)",borderRadius:12,padding:"8px 6px 10px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+                <div style={{fontSize:26,lineHeight:1,marginBottom:4}}>🎯</div>
+                <span style={{fontSize:12,fontWeight:700,color:"#4caf50"}}>จบเกม</span>
+              </div>
+            ) : (
+              <div onClick={onSubmit} style={{background:"rgba(34,139,68,0.25)",border:"1px solid rgba(34,139,68,0.5)",borderRadius:12,padding:"8px 6px 10px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+                <div style={{fontSize:26,lineHeight:1,marginBottom:4}}>✓</div>
+                <span style={{fontSize:13,fontWeight:700,color:"#4caf50"}}>บันทึก</span>
+              </div>
+            )}
+          </div>
           {error&&<p style={S.error}>{error}</p>}
-          {currentRound+1===ROUNDS ? (
-            <button style={S.startBtn} onClick={onSubmit}>บันทึกหลุม {currentRound+1} และจบเกม 🎯</button>
-          ) : (
-            <button style={S.startBtn} onClick={onSubmit}>บันทึก →</button>
-          )}
           {currentRound>=8&&currentRound+1<ROUNDS&&(
             <button onClick={()=>onEndGame(inputScores)} style={{...S.startBtn,background:"linear-gradient(135deg,#c0392b,#e74c3c)",marginTop:10}}>
               🏁 จบเกมที่หลุม {currentRound+1}
