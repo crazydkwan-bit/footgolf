@@ -74,13 +74,16 @@
   // Assign ranks and points considering ties
   // Players with _playoffWinner=true are forced to rank 1 (no ties)
   function assignRanksAndPoints(ranked, playerCount) {
+    // Normalize: always recalculate total from scores if available
+    const normalized = ranked.map(p => ({
+      ...p,
+      total: p.scores ? p.scores.reduce((a,b)=>a+(b??0),0) : (p.total||0)
+    }));
     const result = [];
     let i = 0;
-    // Check if first player is a playoff winner (no tie at 1st)
-    const hasPlayoffWinner = ranked.length > 0 && ranked[0]._playoffWinner;
-    while (i < ranked.length) {
-      const p = ranked[i];
-      // Playoff winner: always rank 1 alone, no tie
+    const hasPlayoffWinner = normalized.length > 0 && normalized[0]._playoffWinner;
+    while (i < normalized.length) {
+      const p = normalized[i];
       if (p._playoffWinner) {
         const pts = calcSharedPoints(playerCount, 0, 1);
         result.push({ ...p, rank: 1, tieCount: 1, points: pts });
@@ -89,16 +92,15 @@
       }
       const score = p.total;
       let j = i;
-      // Don't group ties at position 0 if there's a playoff winner
       if (hasPlayoffWinner || i > 0) {
-        while (j < ranked.length && ranked[j].total === score && !ranked[j]._playoffWinner) j++;
+        while (j < normalized.length && normalized[j].total === score && !normalized[j]._playoffWinner) j++;
       } else {
-        while (j < ranked.length && ranked[j].total === score) j++;
+        while (j < normalized.length && normalized[j].total === score) j++;
       }
       const tieCount = j - i;
       const sharedPts = calcSharedPoints(playerCount, i, tieCount);
       for (let k = i; k < j; k++) {
-        result.push({ ...ranked[k], rank: i + 1, tieCount, points: sharedPts });
+        result.push({ ...normalized[k], rank: i + 1, tieCount, points: sharedPts });
       }
       i = j;
     }
@@ -122,7 +124,6 @@
     const [pinInput, setPinInput] = useState("");
     const [pinError, setPinError] = useState("");
     const [sheetUrl, setSheetUrl] = useState("");
-    const [sheetUrlInput, setSheetUrlInput] = useState("");
     const [finalRanked, setFinalRanked] = useState(null);
     const [playoffPlayers, setPlayoffPlayers] = useState([]);
     const [leaderboardData, setLeaderboardData] = useState(null);
@@ -134,7 +135,7 @@
       const g = load(SAVE_KEY);
       if (g && g.screen==="game") setHasResume(true);
       const url = load(SHEET_URL_KEY)||"";
-      setSheetUrl(url); setSheetUrlInput(url);
+      setSheetUrl(url);
     }, []);
 
     function resume() {
@@ -171,47 +172,32 @@
       const parsed = inputScores.map(v=>parseFloat(v));
       if (parsed.some(v=>isNaN(v))) { setError("กรอกคะแนนให้ครบทุกคน"); return; }
       setError("");
-      const nr = currentRound+1;
-      if (nr >= ROUNDS) {
-        // Last hole - save scores then finish
-        finishGame(players, parsed);
+      if (currentRound + 1 >= ROUNDS) {
+        concludeGame(players, parsed);
       } else {
         setPendingScores(parsed); setConfirmNext(true);
       }
     }
 
     function endGameNow(currentInputScores) {
-      // currentInputScores passed explicitly from GameScreen
       const parsed = currentInputScores.map(v=>parseFloat(v));
       if (parsed.some(v=>isNaN(v))) { setError("กรอกคะแนนหลุมนี้ให้ครบก่อนจบเกม"); return; }
       setError("");
-      const next = players.map((p,i)=>({...p,scores:[...p.scores,parsed[i]]}));
-      setPlayers(next);
-      const ranked = getRank(next);
-      save(SAVE_KEY,null);
-      if (ranked.length > 1 && ranked[0].total === ranked[1].total) {
-        const tied = ranked.filter(p=>p.total===ranked[0].total);
-        setPlayoffPlayers(tied.map(p=>({...p})));
-        setScreen("playoff");
-      } else {
-        setFinalRanked(assignRanksAndPoints(ranked, next.length));
-        setScreen("result");
-      }
+      concludeGame(players, parsed);
     }
 
-    function finishGame(currentPlayers, lastScores) {
-      const next = currentPlayers.map((p,i)=>({...p,scores:[...p.scores, lastScores ? lastScores[i] : p.scores[p.scores.length-1]]}));
+    // Single unified function: append lastScores, check tie, navigate to result or playoff
+    function concludeGame(currentPlayers, lastScores) {
+      const next = currentPlayers.map((p,i)=>({...p, scores:[...p.scores, lastScores[i]]}));
       const ranked = getRank(next);
       setPlayers(next);
-      save(SAVE_KEY,null);
+      save(SAVE_KEY, null);
       if (ranked.length > 1 && ranked[0].total === ranked[1].total) {
-        // Tie at 1st - go to playoff with tied players
         const tied = ranked.filter(p=>p.total===ranked[0].total);
         setPlayoffPlayers(tied.map(p=>({...p})));
         setScreen("playoff");
       } else {
         setFinalRanked(assignRanksAndPoints(ranked, next.length));
-        setCurrentRound(next[0].scores.length);
         setScreen("result");
       }
     }
@@ -232,20 +218,8 @@
     }
 
     function finishPlayoff(sortedPlayers) {
-      const totalPlayers = players.length;
-      // Recalculate total from scores to ensure accuracy
-      const recalculated = sortedPlayers.map(p => ({
-        ...p,
-        total: p.scores ? p.scores.reduce((a,b)=>a+(b||0),0) : p.total
-      }));
-      // Re-sort: playoff winner first, then by recalculated total
-      recalculated.sort((a,b) => {
-        if (a._playoffWinner) return -1;
-        if (b._playoffWinner) return 1;
-        return a.total - b.total;
-      });
-      setPlayers(recalculated);
-      setFinalRanked(assignRanksAndPoints(recalculated, totalPlayers));
+      setPlayers(sortedPlayers);
+      setFinalRanked(assignRanksAndPoints(sortedPlayers, players.length));
       setScreen("result");
     }
 
@@ -266,7 +240,7 @@
       if (pinInput===ADMIN_PIN) { setModal("settings"); setPinError(""); }
       else setPinError("PIN ไม่ถูกต้อง");
     }
-    function saveSettings() { save(SHEET_URL_KEY,sheetUrlInput); setSheetUrl(sheetUrlInput); setModal(null); }
+    function saveSettings() { save(SHEET_URL_KEY, sheetUrl); setModal(null); }
 
     async function addPlayerToSheet() {
       const name = newPlayerName.trim();
@@ -295,7 +269,7 @@
       const ranked = finalRanked || assignRanksAndPoints(getRank(players), players.length);
       const now = new Date();
       const date = now.getDate()+"/"+(now.getMonth()+1)+"/"+now.getFullYear();
-      const holesPlayed = ranked[0]?.scores?.length || currentRound;
+      const holesPlayed = ranked[0]?.scores?.length || 0;
       const playerCount = ranked.length;
       const rows = ranked.map(p=>({
         date, holesPlayed, playerCount,
@@ -414,7 +388,7 @@
           <div className="overlay"><div className="modal" style={{textAlign:"left",maxHeight:"80vh",overflowY:"auto"}}>
             <p style={{fontSize:20,fontWeight:700,color:"#fff",margin:"0 0 18px",textAlign:"center"}}>⚙️ ตั้งค่า</p>
             <p style={{fontSize:14,color:"rgba(255,255,255,0.5)",margin:"0 0 8px"}}>Google Apps Script URL</p>
-            <input value={sheetUrlInput} onChange={e=>setSheetUrlInput(e.target.value)}
+            <input value={sheetUrl} onChange={e=>setSheetUrl(e.target.value)}
               style={{...S.input,fontSize:13,padding:"10px 12px",marginBottom:10}}
               placeholder="https://script.google.com/macros/s/.../exec"/>
             <button onClick={saveSettings} style={{...S.startBtn,marginTop:0,marginBottom:16}}>บันทึก URL</button>
@@ -462,13 +436,13 @@
   }
 
   function SetupScreen({ playerCount, onSelectCount, selectedNames, onToggleName, availableNames, loadingNames, onStart, error, hasResume, onResume, onSettings, onLeaderboard }) {
-    const COUNT_ROWS = [[1,2,3,4,5],[6,7,8,9]];
+    const COUNT_ROWS = [[2,3,4,5],[6,7,8,9]];
     return (
       <div>
         <div className="hero-wrap">
           <img className="hero-img" src={HERO_IMG} alt="FootGolf"/>
           <div style={{position:"absolute",top:10,right:12,zIndex:3}}>
-            <span style={{fontSize:11,color:"rgba(255,255,255,0.5)",background:"rgba(0,0,0,0.3)",padding:"2px 7px",borderRadius:6,letterSpacing:"0.5px"}}>v3.0</span>
+            <span style={{fontSize:11,color:"rgba(255,255,255,0.5)",background:"rgba(0,0,0,0.3)",padding:"2px 7px",borderRadius:6,letterSpacing:"0.5px"}}>v3.1</span>
           </div>
           <div className="hero-text"><h1>⛳ FootGolf</h1><p>Phonphisai Footgolf Club</p></div>
         </div>
@@ -676,7 +650,7 @@
     );
   }
 
-    function HistoryTable({ players, currentRound, onEdit }) {
+  function HistoryTable({ players, currentRound, onEdit }) {
     const [editing,setEditing]=useState(null);
     const [editVal,setEditVal]=useState("");
     if(currentRound===0) return <p style={{color:"rgba(255,255,255,0.4)",textAlign:"center",marginTop:24,fontSize:17}}>ยังไม่มีคะแนนย้อนหลัง</p>;
